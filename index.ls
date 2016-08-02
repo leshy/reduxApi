@@ -5,71 +5,59 @@ require! {
 }
 
 
-CRUD = do
-  findOne: true
-  find: true
-  create: true
-  remove: true
-  update: true
-
-remoteResource = (CRUD, modelName) ->
-  passThroughAction = (actionName) -> "#{actionName}": -> (if it? then { data: it } else {}) <<< type: "api_#{modelName}_#{actionName}"
+# loading empty data error
+coreActions = (resourceName) ->
+  # action without sideeffects, just a message for a state update
+  passThroughAction = (actionName) -> "#{actionName}": -> (if it? then { data: it } else {}) <<< type: "resource_#{resourceName}_#{actionName}"
 
   actions = {}
   
   assign actions, reduce do
-    <[ loading empty update remove add error ]>
+    <[ loading empty data error ]>
     (memo, name) -> assign memo, passThroughAction name
     {}
 
+  actions
 
-  crudAction = (actionName) ->
-    "#{actionName}": ({id}: args)->
-      dispatch actions.loading id
-      crud[actionName] ...
-    
-    
-  assign actions, reduce CRUD,
-    (memo, f, name) ->
-      assign memo,"#{name}": ( {id: id}: data ) ->
-        dispatch actions.loading id
-                
-        CRUD[name] data
-        .catch -> dispatch actions.error it
-        .then -> switch name
-          | "findOne" => dispatch actions.add it
-          | "find" => each it, -> dispatch actions.add it
-          | "update" => dispatch actions.update it
-          | "create" => dispatch actions.add it
-          | "remove" => dispatch actions.remove it
 
-    
-  assign actions, do
-    get: (id) ->
-      (dispatch, getState) ->
-        dispatch actions.loading id
-        
-        CRUD.get name, id
-        .then -> dispatch actions.data it
-        .catch -> dispatch actions.error it
+# wraps different async fetchers so they trigger loading and data or error actions
+remoteResource = (resourceName, fetchers) -> 
+  actions = coreActions resourceName
+  
+  assign actions, reduce do
+    fetchers
+    (memo, fetcher, name) -> 
+      memo <<< "#{name}": (...args) ->
+          dispatch actions.loading
+          fetcher.apply @, args
+            .then -> actions.data it
+            .error -> actions.error it
+    {}
 
-        
-    need: (id) ->
-      (dispatch, getState) ->
-        state = getState!
-        if not state.resources[name][id]? then dispatch actions.get id
+REST = (resourceName) ->
+  remoteResource resourceName, do
+    create: -> new p (resolve,reject) ~> resolve true
+    update: -> new p (resolve,reject) ~> resolve true
+    find: -> new p (resolve,reject) ~> resolve true
+    findOne: -> new p (resolve,reject) ~> resolve true
+    remove: -> new p (resolve,reject) ~> resolve true
 
+
+RESTsync = (io, resourceName) ->
+  actions = assign REST resourceName, do
+    remoteUpdate: -> true
+  
+  io.socket.on resourceName, (event) ->
+    switch event.verb
+      | "updated" => store.dispatch actions.update event.id, event.data
+      | "created" => store.dispatch actions.add event.data
+      | otherwise => console.warn "UNKNOWN CHANNEL EVENT #{resourceName}", event
 
   actions
+
+#util.inspect remoteResource "bla", get: -> new p (resolve,reject) ~> resolve true
+util.inspect REST "bla", get: -> new p (resolve,reject) ~> resolve true
 
 # api_user_require 87sad98gsadg98dsa
 # api_user_get 87sad98gsadg98dsa
 # api_user_loading 87sad98gsadg98dsa
-
-
-util.inspect remoteResource "bla"
-
-
-
-
-
