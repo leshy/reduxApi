@@ -7,17 +7,40 @@ require! {
 
 # loading empty data error
 coreActions = (resourceName) ->
-  # action without sideeffects, just a message for a state update
+  # action without side effects, just a message for a state update
   passThroughAction = (actionName) -> "#{actionName}": -> (if it? then { data: it } else {}) <<< type: "resource_#{resourceName}_#{actionName}"
-
+  
   actions = {}
   
   assign actions, reduce do
     <[ loading empty data error ]>
     (memo, name) -> assign memo, passThroughAction name
     {}
-
+  
   actions
+
+
+
+coreReducers = (resourceName) ->
+  do
+   "@@INIT": { state: 'init' }
+   "resource_#{resourceName}_loading": { state: 'loading' }
+   "resource_#{resourceName}_empty": { state: 'empty' }
+   "resource_#{resourceName}_error": { state: 'error', error: action.error }
+   "resource_#{resourceName}_data": { state: 'data', data: action.data }
+
+RESTReducers = (resourceName) ->
+  coreReducers(resourceName) <<< do
+    "resource_#{resourceName}_add": assign {}, state, data: assign { "#{action.data.id}": action.data }, state.data
+    "resource_#{resourceName}_remove": assign {}, state, data: [ action.data ...state.data ]
+    "resource_#{resourceName}_update": assign {}, state, data: [ action.data ...state.data ]
+
+RESTSyncReducers = (resourceName) ->
+  remoteResourceReducers(resourceName) <<< do
+    "resource_#{resourceName}_remoteAdd": assign {}, state, data: assign { "#{action.data.id}": action.data }, state.data
+    "resource_#{resourceName}_remoteDelete": assign {}, state, data: [ action.data ...state.data ]
+    "resource_#{resourceName}_remoteUpdate": assign {}, state, data: [ action.data ...state.data ]
+
 
 
 # wraps different async fetchers so they trigger loading and data or error actions
@@ -34,23 +57,24 @@ remoteResource = (resourceName, fetchers) ->
             .error -> actions.error it
     {}
 
-REST = (resourceName) ->
-  remoteResource resourceName, do
-    create: -> new p (resolve,reject) ~> resolve true
-    update: -> new p (resolve,reject) ~> resolve true
+REST = (io, resourceName) --> 
+ remoteResource resourceName, do
+    create: (data) -> io.socket.post "/api/rest/#{resourceName}", data
+    update: (id, data) -> io.socket.post "/api/rest/#{resourceName}/#{id}", data
+    remove: (id) -> io.socket.delete "/api/rest/#{resourceName}/#{id}"
     find: -> new p (resolve,reject) ~> resolve true
     findOne: -> new p (resolve,reject) ~> resolve true
-    remove: -> new p (resolve,reject) ~> resolve true
 
-
-RESTsync = (io, resourceName) ->
+RESTsync = (io, resourceName) -->
   actions = assign REST resourceName, do
     remoteUpdate: -> true
+    remoteAdd: -> true
+    remoteDelete: -> true
   
   io.socket.on resourceName, (event) ->
     switch event.verb
-      | "updated" => store.dispatch actions.update event.id, event.data
-      | "created" => store.dispatch actions.add event.data
+      | "updated" => store.dispatch actions.remoteUpdate event.id, event.data
+      | "created" => store.dispatch actions.remoteCreate event.data
       | otherwise => console.warn "UNKNOWN CHANNEL EVENT #{resourceName}", event
 
   actions
